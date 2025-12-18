@@ -7,7 +7,7 @@ from src.ai.agents.task_breaker import TaskBreakdownAgent
 from src.repository.cloner import RepositoryCloner
 from src.repository.analyzer import RepositoryAnalyzer
 from src.github.client import GitHubClient
-from src.github.mutations import CREATE_ISSUE, ADD_TO_PROJECT
+from src.github.mutations import CREATE_ISSUE, ADD_TO_PROJECT, UPDATE_PROJECT_FIELD
 from src.config import settings
 from src.utils.logger import get_logger
 
@@ -110,9 +110,9 @@ class CreateTaskWorkflow:
         """タスクを分解"""
         try:
             logger.info("=" * 80)
-            logger.info("🚀 [ワークフロー] タスク分解フェーズ開始")
+            logger.info("🚀 [Workflow] Task breakdown phase started")
             logger.info("=" * 80)
-            logger.info(f"📝 タスク: {state['task_description']}")
+            logger.info(f"📝 Task: {state['task_description']}")
 
             # リポジトリコンテキストを取得
             analyzer = RepositoryAnalyzer(state["repo_path"])
@@ -120,25 +120,25 @@ class CreateTaskWorkflow:
             summary = analyzer.get_project_summary()
 
             logger.info("\n" + "─" * 80)
-            logger.info("📍 [フェーズ 1/3] キーワード抽出")
+            logger.info("📍 [Phase 1/3] Keyword extraction")
             logger.info("─" * 80)
 
-            # タスクに関連するキーワードを抽出
+            # Extract keywords related to the task
             keywords = await self.breakdown_agent.extract_keywords(
                 state["task_description"]
             )
 
             logger.info("\n" + "─" * 80)
-            logger.info("📍 [フェーズ 2/3] コードベース分析")
+            logger.info("📍 [Phase 2/3] Codebase analysis")
             logger.info("─" * 80)
 
-            # 賢くコードを読み込む（tree-sitter + ripgrep）
+            # Read code intelligently (tree-sitter + ripgrep)
             code_content = analyzer.read_code_intelligently(
                 keywords, max_functions=20, max_chars=50000
             )
 
             logger.info("\n" + "─" * 80)
-            logger.info("📍 [フェーズ 3/3] タスク分解実行")
+            logger.info("📍 [Phase 3/3] Task breakdown execution")
             logger.info("─" * 80)
 
             repo_context = f"""
@@ -159,7 +159,7 @@ class CreateTaskWorkflow:
             state["subtasks"] = subtasks
 
             logger.info("\n" + "=" * 80)
-            logger.info(f"✅ [ワークフロー] タスク分解完了: {len(subtasks)} 個のサブタスクを作成")
+            logger.info(f"✅ [Workflow] Task breakdown complete: Created {len(subtasks)} subtasks")
             logger.info("=" * 80)
 
         except Exception as e:
@@ -172,9 +172,9 @@ class CreateTaskWorkflow:
         """GitHub Issuesを作成"""
         try:
             logger.info("\n" + "=" * 80)
-            logger.info("📝 [ワークフロー] GitHub Issues作成フェーズ開始")
+            logger.info("📝 [Workflow] GitHub Issues creation phase started")
             logger.info("=" * 80)
-            logger.info(f"🎯 作成予定: {len(state['subtasks'])} 個のIssue")
+            logger.info(f"🎯 Planned to create: {len(state['subtasks'])} issues")
             github = GitHubClient()
             created_issues = []
 
@@ -182,6 +182,7 @@ class CreateTaskWorkflow:
             from src.github.queries import (
                 GET_REPOSITORY_AND_PROJECT_IDS,
                 GET_PROJECT_FIELDS,
+                GET_PROJECT_ITEMS,
             )
 
             ids_result = await github.execute_query(
@@ -196,7 +197,48 @@ class CreateTaskWorkflow:
             repo_id = ids_result["repository"]["id"]
             project_id = ids_result["user"]["projectV2"]["id"]
 
-            # Sizeフィールド情報を取得
+            # Fetch existing issues for duplicate checking
+            if settings.CHECK_DUPLICATES:
+                logger.info("🔍 [Duplicate Check] Fetching existing issues...")
+
+                existing_items_result = await github.execute_query(
+                    GET_PROJECT_ITEMS,
+                    {
+                        "org": settings.GITHUB_ORG,
+                        "projectNumber": settings.GITHUB_PROJECT_NUMBER,
+                    },
+                )
+
+                existing_issues = []
+                for item in existing_items_result["user"]["projectV2"]["items"]["nodes"]:
+                    content = item.get("content")
+                    if content and content.get("title"):
+                        existing_issues.append({
+                            "title": content["title"],
+                            "url": content["url"],
+                            "state": content.get("state", "OPEN"),
+                            "number": content.get("number"),
+                        })
+
+                logger.info(f"   Found {len(existing_issues)} existing issues")
+
+                from src.utils.duplicate_checker import (
+                    filter_existing_issues,
+                    check_for_duplicates,
+                    format_duplicate_warning,
+                )
+
+                # Filter issues for duplicate checking (exclude closed)
+                filtered_issues = filter_existing_issues(
+                    existing_issues,
+                    include_closed=settings.INCLUDE_CLOSED_IN_DUPLICATE_CHECK
+                )
+                logger.info(f"   Checking against {len(filtered_issues)} active issues")
+            else:
+                logger.info("⏭️ [Duplicate Check] Skipped (disabled in settings)")
+                filtered_issues = []
+
+            # Sizeフィールドと Statusフィールドの情報を取得
             fields_result = await github.execute_query(
                 GET_PROJECT_FIELDS,
                 {
@@ -207,22 +249,54 @@ class CreateTaskWorkflow:
 
             # Sizeフィールドを探す
             size_field = None
+            status_field = None
             for field in fields_result["user"]["projectV2"]["fields"]["nodes"]:
                 if field.get("name") == "Size":
                     size_field = field
-                    break
+                elif field.get("name") == "Status":
+                    status_field = field
 
             if not size_field:
                 logger.warning("Size field not found in project")
+            if not status_field:
+                logger.warning("Status field not found in project")
 
-            # 各サブタスクをIssue化
+            # Convert each subtask to an issue
             logger.info("\n" + "─" * 80)
-            logger.info("🔧 各サブタスクをIssue化")
+            logger.info("🔧 Converting each subtask to issue")
             logger.info("─" * 80)
 
             for i, subtask in enumerate(state["subtasks"], 1):
+                # Validate and format title
+                from src.utils.title_validator import validate_and_format_title, validate_title_length
+
+                original_title = subtask["title"]
+                formatted_title, was_modified = validate_and_format_title(original_title, auto_fix=True)
+
+                if was_modified:
+                    logger.info(f"   📝 Title formatted: {original_title} → {formatted_title}")
+
+                if not validate_title_length(formatted_title):
+                    logger.error(f"   ❌ Title too long, truncating: {formatted_title}")
+
+                subtask["title"] = formatted_title
+
+                # Check for duplicates
+                if settings.CHECK_DUPLICATES and filtered_issues:
+                    is_duplicate, similar_issues = check_for_duplicates(
+                        subtask["title"],
+                        filtered_issues,
+                        threshold=settings.DUPLICATE_SIMILARITY_THRESHOLD
+                    )
+
+                    if is_duplicate:
+                        warning_msg = format_duplicate_warning(subtask["title"], similar_issues)
+                        logger.warning(warning_msg)
+                        logger.info(f"   ⏭️ Skipping duplicate issue")
+                        continue  # Skip this issue
+
                 logger.info(f"\n📌 [{i}/{len(state['subtasks'])}] {subtask['title']}")
-                # 参考コードセクションを構築
+                # Build reference code section
                 reference_section = ""
                 if subtask.get("reference_code"):
                     ref = subtask["reference_code"]
@@ -302,19 +376,42 @@ Created by AI Task Bot
                             },
                         )
                         logger.info(
-                            f"   ✓ Sizeフィールド設定: {estimated_effort} → {size_value}"
+                            f"   ✓ Size field set: {estimated_effort} → {size_value}"
                         )
                     else:
-                        logger.warning(f"   ⚠️ Sizeオプション {size_value} が見つかりません")
+                        logger.warning(f"   ⚠️ Size option {size_value} not found")
+
+                # Statusフィールドを更新
+                if status_field:
+                    from src.utils.size_converter import get_size_option_id
+
+                    status_value = settings.DEFAULT_PROJECT_STATUS
+                    status_option_id = get_size_option_id(
+                        status_field["options"], status_value
+                    )
+
+                    if status_option_id:
+                        await github.execute_query(
+                            UPDATE_PROJECT_FIELD,
+                            {
+                                "projectId": project_id,
+                                "itemId": project_item_id,
+                                "fieldId": status_field["id"],
+                                "value": {"singleSelectOptionId": status_option_id},
+                            },
+                        )
+                        logger.info(f"   ✓ Status field set: {status_value}")
+                    else:
+                        logger.warning(f"   ⚠️ Status option {status_value} not found")
 
                 created_issues.append({"title": subtask["title"], "url": issue_url})
 
-                logger.info(f"   ✓ Issue作成完了: {issue_url}")
+                logger.info(f"   ✓ Issue created: {issue_url}")
 
             state["created_issues"] = created_issues
 
             logger.info("\n" + "=" * 80)
-            logger.info(f"✅ [ワークフロー] 全Issue作成完了: {len(created_issues)} 個")
+            logger.info(f"✅ [Workflow] All issues created: {len(created_issues)} issues")
             logger.info("=" * 80)
             for i, issue in enumerate(created_issues, 1):
                 logger.info(f"   {i}. {issue['title']}")

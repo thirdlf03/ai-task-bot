@@ -4,7 +4,7 @@ from functools import lru_cache
 
 
 class Settings(BaseSettings):
-    """アプリケーション設定"""
+    """Application settings"""
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
@@ -33,10 +33,22 @@ class Settings(BaseSettings):
     LOG_LEVEL: str = "INFO"
     LOG_FILE: str = "logs/bot.log"
 
+    # Title Validation
+    VALIDATE_CONVENTIONAL_COMMITS: bool = True
+    AUTO_FIX_TITLES: bool = True
+
+    # Duplicate Detection
+    CHECK_DUPLICATES: bool = True
+    DUPLICATE_SIMILARITY_THRESHOLD: float = 0.8
+    INCLUDE_CLOSED_IN_DUPLICATE_CHECK: bool = False
+
+    # GitHub Projects Status
+    DEFAULT_PROJECT_STATUS: str = "Backlog"
+
     @field_validator("GITHUB_TOKEN")
     @classmethod
     def validate_github_token(cls, v: str) -> str:
-        """GitHub tokenの形式検証"""
+        """Validate GitHub token format"""
         valid_prefixes = ("ghp_", "github_pat_", "gho_", "ghs_", "ghu_")
         if not v or not v.startswith(valid_prefixes):
             raise ValueError(
@@ -47,7 +59,7 @@ class Settings(BaseSettings):
     @field_validator("DISCORD_BOT_TOKEN")
     @classmethod
     def validate_discord_token(cls, v: str) -> str:
-        """Discord bot tokenの検証"""
+        """Validate Discord bot token"""
         if not v or len(v) < 50:
             raise ValueError("Invalid Discord bot token")
         return v
@@ -55,7 +67,7 @@ class Settings(BaseSettings):
     @field_validator("GEMINI_API_KEY")
     @classmethod
     def validate_gemini_key(cls, v: str) -> str:
-        """Gemini API keyの形式検証（空の場合はスキップ）"""
+        """Validate Gemini API key format (skip if empty)"""
         if v and not v.startswith("AIza"):
             raise ValueError("Invalid Gemini API key format. Must start with 'AIza'")
         return v
@@ -63,7 +75,7 @@ class Settings(BaseSettings):
 
 @lru_cache()
 def get_settings() -> Settings:
-    """設定のシングルトンインスタンスを取得"""
+    """Get singleton instance of settings"""
     return Settings()
 
 

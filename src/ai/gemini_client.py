@@ -1,4 +1,4 @@
-import google.generativeai as genai
+from google import genai
 from typing import List, Dict, Any
 import json
 import re
@@ -12,8 +12,8 @@ class GeminiClient:
     """Gemini API クライアント"""
 
     def __init__(self):
-        genai.configure(api_key=settings.GEMINI_API_KEY)
-        self.model = genai.GenerativeModel("gemini-2.0-flash-exp")
+        self.client = genai.Client(api_key=settings.GEMINI_API_KEY)
+        self.model_name = "gemini-2.0-flash-exp"
 
     async def analyze_code(
         self, code_context: str, task_description: str
@@ -50,7 +50,10 @@ class GeminiClient:
 """
 
         logger.info("Analyzing code implementation status with Gemini...")
-        response = self.model.generate_content(prompt)
+        response = self.client.models.generate_content(
+            model=self.model_name,
+            contents=prompt
+        )
         result = self._parse_analysis_response(response.text)
         logger.info(
             f"Analysis complete: is_implemented={result['is_implemented']}, confidence={result['confidence']}"
@@ -84,6 +87,11 @@ class GeminiClient:
 - 独立して実装・テスト可能
 - 明確な完了条件がある
 - 既存のコードがあれば、参考コードとして抜粋を含める
+- **タイトルはConventional Commits形式に従う**: type(scope): description
+  - type: feat, fix, docs, style, refactor, perf, test, chore のいずれか
+  - scope: 変更の範囲（例: api, ui, db）- オプション
+  - description: 簡潔な説明（小文字で始まる）
+  - 例: "feat(api): add user authentication", "fix(db): resolve connection timeout"
 
 以下のJSON形式で回答してください:
 ```json
@@ -108,24 +116,27 @@ class GeminiClient:
 注意: 参考コードがない場合、reference_codeはnullにしてください。
 """
 
-        logger.info("🤖 [AI思考] タスク分解開始...")
-        logger.info(f"📊 リポジトリコンテキスト: {len(repo_context)} 文字")
+        logger.info("🤖 [AI Processing] Starting task breakdown...")
+        logger.info(f"📊 Repository context: {len(repo_context)} characters")
 
-        response = self.model.generate_content(prompt)
+        response = self.client.models.generate_content(
+            model=self.model_name,
+            contents=prompt
+        )
 
-        logger.info(f"💭 [Gemini応答長さ] {len(response.text)} 文字")
-        logger.info(f"💭 [Gemini応答プレビュー]\n{response.text[:1000]}...")
+        logger.info(f"💭 [Gemini Response Length] {len(response.text)} characters")
+        logger.info(f"💭 [Gemini Response Preview]\n{response.text[:1000]}...")
 
         subtasks = self._parse_subtasks_response(response.text)
 
-        logger.info(f"✅ [タスク分解完了] {len(subtasks)} 個のサブタスクを作成")
+        logger.info(f"✅ [Task Breakdown Complete] Created {len(subtasks)} subtasks")
 
-        # 各サブタスクの詳細をログ
+        # Log details of each subtask
         for i, subtask in enumerate(subtasks, 1):
-            logger.info(f"📌 サブタスク {i}/{len(subtasks)}: {subtask.get('title', 'No title')}")
-            logger.info(f"   ├─ サイズ: {subtask.get('estimated_effort', 'Unknown')}")
-            logger.info(f"   ├─ 依存: {subtask.get('dependencies', [])}")
-            logger.info(f"   └─ 参考コード: {'あり' if subtask.get('reference_code') else 'なし'}")
+            logger.info(f"📌 Subtask {i}/{len(subtasks)}: {subtask.get('title', 'No title')}")
+            logger.info(f"   ├─ Size: {subtask.get('estimated_effort', 'Unknown')}")
+            logger.info(f"   ├─ Dependencies: {subtask.get('dependencies', [])}")
+            logger.info(f"   └─ Reference code: {'Yes' if subtask.get('reference_code') else 'No'}")
 
         return subtasks
 
@@ -154,7 +165,7 @@ class GeminiClient:
             return {
                 "is_implemented": False,
                 "confidence": 0.0,
-                "reasoning": "パース失敗",
+                "reasoning": "Parse failed",
                 "related_files": [],
                 "missing_components": [],
             }
@@ -211,18 +222,21 @@ class GeminiClient:
 - 例: "認証機能を追加" → ["auth", "login", "user"]
 """
 
-        logger.info("🤖 [AI思考] キーワード抽出開始...")
-        logger.info(f"📝 タスク内容: {task_description}")
+        logger.info("🤖 [AI Processing] Starting keyword extraction...")
+        logger.info(f"📝 Task description: {task_description}")
 
-        response = self.model.generate_content(prompt)
+        response = self.client.models.generate_content(
+            model=self.model_name,
+            contents=prompt
+        )
 
-        logger.info(f"💭 [Gemini応答]\n{response.text[:500]}...")
+        logger.info(f"💭 [Gemini Response]\n{response.text[:500]}...")
 
         result = self._parse_keywords_response(response.text)
         keywords = result.get("keywords", [])
 
-        logger.info(f"🔑 [抽出完了] キーワード: {keywords}")
-        logger.info(f"💡 [AI判断] これらのキーワードでファイルを検索します")
+        logger.info(f"🔑 [Extraction Complete] Keywords: {keywords}")
+        logger.info(f"💡 [AI Decision] Searching files with these keywords")
 
         return keywords
 

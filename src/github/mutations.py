@@ -65,3 +65,24 @@ mutation UpdateField($projectId: ID!, $itemId: ID!, $fieldId: ID!, $value: Proje
   }
 }
 """
+
+# Assignee削除
+REMOVE_ASSIGNEES = """
+mutation RemoveAssignees($issueId: ID!, $assigneeIds: [ID!]!) {
+  removeAssigneesFromAssignable(input: {
+    assignableId: $issueId
+    assigneeIds: $assigneeIds
+  }) {
+    assignable {
+      ... on Issue {
+        id
+        assignees(first: 10) {
+          nodes {
+            login
+          }
+        }
+      }
+    }
+  }
+}
+"""

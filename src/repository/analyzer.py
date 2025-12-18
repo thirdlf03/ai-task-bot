@@ -190,12 +190,12 @@ class RepositoryAnalyzer:
         if not keywords:
             return []
 
-        logger.info(f"🔍 [ファイル検索] ripgrepでキーワード検索開始: {keywords}")
+        logger.info(f"🔍 [File Search] Starting ripgrep keyword search: {keywords}")
 
         matched_files = set()
 
         for keyword in keywords:
-            logger.info(f"   🔎 検索中: '{keyword}'...")
+            logger.info(f"   🔎 Searching: '{keyword}'...")
             try:
                 # ripgrepをJSON出力モードで実行
                 result = subprocess.run(
@@ -227,16 +227,16 @@ class RepositoryAnalyzer:
                         continue
 
             except (subprocess.TimeoutExpired, FileNotFoundError) as e:
-                # ripgrepが見つからない、またはタイムアウト
-                logger.warning(f"   ⚠️ ripgrepエラー、globにフォールバック: {e}")
-                # フォールバック: glob検索
+                # ripgrep not found or timeout
+                logger.warning(f"   ⚠️ ripgrep error, falling back to glob: {e}")
+                # Fallback: glob search
                 matched_files.update(self.search_files(f"**/*{keyword}*"))
 
-        logger.info(f"✅ [検索完了] {len(matched_files)} ファイルが見つかりました")
+        logger.info(f"✅ [Search Complete] Found {len(matched_files)} files")
         for i, file_path in enumerate(list(matched_files)[:10], 1):
             logger.info(f"   {i}. {file_path}")
         if len(matched_files) > 10:
-            logger.info(f"   ... 他 {len(matched_files) - 10} ファイル")
+            logger.info(f"   ... and {len(matched_files) - 10} more files")
 
         return list(matched_files)
 
@@ -253,13 +253,13 @@ class RepositoryAnalyzer:
         Returns:
             Markdown形式の関連コード
         """
-        logger.info(f"🧠 [賢いコード抽出] 開始 (最大{max_functions}関数, {max_chars}文字)")
+        logger.info(f"🧠 [Smart Code Extraction] Starting (max {max_functions} functions, {max_chars} chars)")
 
-        # ripgrepでファイル検索
+        # Search files with ripgrep
         relevant_files = self.ripgrep_search(keywords)
 
         if not relevant_files:
-            # フォールバック: キーワードベースのglob検索
+            # Fallback: keyword-based glob search
             relevant_files = []
             for keyword in keywords:
                 relevant_files.extend(self.search_files(f"**/*{keyword}*"))
@@ -269,19 +269,19 @@ class RepositoryAnalyzer:
         total_chars = 0
         function_count = 0
 
-        logger.info(f"🌲 [tree-sitter解析] {len(relevant_files)} ファイルを解析中...")
+        logger.info(f"🌲 [tree-sitter Parse] Parsing {len(relevant_files)} files...")
 
         for file_path in relevant_files:
             if file_path.suffix != ".py":
                 continue
 
-            logger.info(f"   📄 解析中: {file_path}")
+            logger.info(f"   📄 Parsing: {file_path}")
 
-            # tree-sitterで関数/クラスを抽出
+            # Extract functions/classes with tree-sitter
             definitions = self.code_parser.extract_relevant_code(file_path, keywords)
 
             if definitions:
-                logger.info(f"      ✓ {len(definitions)} 個の関数/クラスを抽出")
+                logger.info(f"      ✓ Extracted {len(definitions)} functions/classes")
 
             if not definitions:
                 continue
@@ -314,11 +314,11 @@ class RepositoryAnalyzer:
                 break
 
         if not content_parts:
-            logger.warning("⚠️ [抽出完了] 関連コードが見つかりませんでした")
+            logger.warning("⚠️ [Extraction Complete] No relevant code found")
             return "No relevant code found."
 
-        logger.info(f"✅ [抽出完了] {function_count} 個の関数/クラスを抽出しました")
-        logger.info(f"   📊 総文字数: {total_chars} 文字")
-        logger.info(f"   💰 推定トークン: ~{total_chars // 4} tokens")
+        logger.info(f"✅ [Extraction Complete] Extracted {function_count} functions/classes")
+        logger.info(f"   📊 Total characters: {total_chars} characters")
+        logger.info(f"   💰 Estimated tokens: ~{total_chars // 4} tokens")
 
         return "\n".join(content_parts)

@@ -137,3 +137,59 @@ query GetProjectFields($org: String!, $projectNumber: Int!) {
   }
 }
 """
+
+# Issue番号からProject Item情報を取得
+GET_ISSUE_WITH_PROJECT_ITEM = """
+query GetIssueWithProjectItem($org: String!, $repo: String!, $issueNumber: Int!, $projectNumber: Int!) {
+  repository(owner: $org, name: $repo) {
+    issue(number: $issueNumber) {
+      id
+      title
+      number
+      url
+      state
+      assignees(first: 10) {
+        nodes {
+          login
+          id
+        }
+      }
+      projectItems(first: 10) {
+        nodes {
+          id
+          project {
+            ... on ProjectV2 {
+              number
+              id
+            }
+          }
+          fieldValues(first: 20) {
+            nodes {
+              ... on ProjectV2ItemFieldSingleSelectValue {
+                name
+                field {
+                  ... on ProjectV2SingleSelectField {
+                    id
+                    name
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+"""
+
+# GitHub loginからUser IDを取得
+GET_USER_ID = """
+query GetUserId($login: String!) {
+  user(login: $login) {
+    id
+    login
+    name
+  }
+}
+"""

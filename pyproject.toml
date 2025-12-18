@@ -7,7 +7,7 @@ requires-python = ">=3.12"
 dependencies = [
     "discord-py>=2.6.4",
     "gitpython>=3.1.45",
-    "google-generativeai>=0.8.6",
+    "google-genai>=0.1.0",
     "langchain-google-genai>=4.1.1",
     "langgraph>=1.0.5",
     "pydantic>=2.12.5",

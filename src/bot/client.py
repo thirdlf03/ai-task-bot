@@ -2,6 +2,7 @@ import discord
 from discord import app_commands
 from src.config import settings
 from src.utils.logger import get_logger
+from src.utils.user_mapping import UserMapping
 
 logger = get_logger(__name__)
 
@@ -14,6 +15,7 @@ class TaskBot(discord.Client):
         intents.message_content = True
         super().__init__(intents=intents)
         self.tree = app_commands.CommandTree(self)
+        self.user_mapping = UserMapping()
 
     async def setup_hook(self):
         """スラッシュコマンドを登録"""
