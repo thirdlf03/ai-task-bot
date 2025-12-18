@@ -37,9 +37,10 @@ class Settings(BaseSettings):
     @classmethod
     def validate_github_token(cls, v: str) -> str:
         """GitHub tokenの形式検証"""
-        if not v or not (v.startswith("ghp_") or v.startswith("github_pat_")):
+        valid_prefixes = ("ghp_", "github_pat_", "gho_", "ghs_", "ghu_")
+        if not v or not v.startswith(valid_prefixes):
             raise ValueError(
-                "Invalid GitHub token format. Must start with 'ghp_' or 'github_pat_'"
+                "Invalid GitHub token format. Must start with one of: ghp_, github_pat_, gho_, ghs_, ghu_"
             )
         return v
 

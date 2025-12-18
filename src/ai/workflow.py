@@ -109,12 +109,37 @@ class CreateTaskWorkflow:
     async def _breakdown_task(self, state: WorkflowState) -> WorkflowState:
         """タスクを分解"""
         try:
-            logger.info("Breaking down task into subtasks")
+            logger.info("=" * 80)
+            logger.info("🚀 [ワークフロー] タスク分解フェーズ開始")
+            logger.info("=" * 80)
+            logger.info(f"📝 タスク: {state['task_description']}")
 
             # リポジトリコンテキストを取得
             analyzer = RepositoryAnalyzer(state["repo_path"])
             file_tree = analyzer.get_file_tree()
             summary = analyzer.get_project_summary()
+
+            logger.info("\n" + "─" * 80)
+            logger.info("📍 [フェーズ 1/3] キーワード抽出")
+            logger.info("─" * 80)
+
+            # タスクに関連するキーワードを抽出
+            keywords = await self.breakdown_agent.extract_keywords(
+                state["task_description"]
+            )
+
+            logger.info("\n" + "─" * 80)
+            logger.info("📍 [フェーズ 2/3] コードベース分析")
+            logger.info("─" * 80)
+
+            # 賢くコードを読み込む（tree-sitter + ripgrep）
+            code_content = analyzer.read_code_intelligently(
+                keywords, max_functions=20, max_chars=50000
+            )
+
+            logger.info("\n" + "─" * 80)
+            logger.info("📍 [フェーズ 3/3] タスク分解実行")
+            logger.info("─" * 80)
 
             repo_context = f"""
 # Project Structure
@@ -122,6 +147,9 @@ class CreateTaskWorkflow:
 
 # Project Summary
 {summary}
+
+# Related Code
+{code_content if code_content else "No relevant code files found."}
 """
 
             subtasks = await self.breakdown_agent.break_down(
@@ -129,7 +157,10 @@ class CreateTaskWorkflow:
             )
 
             state["subtasks"] = subtasks
-            logger.info(f"Created {len(subtasks)} subtasks")
+
+            logger.info("\n" + "=" * 80)
+            logger.info(f"✅ [ワークフロー] タスク分解完了: {len(subtasks)} 個のサブタスクを作成")
+            logger.info("=" * 80)
 
         except Exception as e:
             state["error"] = f"Breakdown failed: {str(e)}"
@@ -140,12 +171,18 @@ class CreateTaskWorkflow:
     async def _create_issues(self, state: WorkflowState) -> WorkflowState:
         """GitHub Issuesを作成"""
         try:
-            logger.info("Creating GitHub issues")
+            logger.info("\n" + "=" * 80)
+            logger.info("📝 [ワークフロー] GitHub Issues作成フェーズ開始")
+            logger.info("=" * 80)
+            logger.info(f"🎯 作成予定: {len(state['subtasks'])} 個のIssue")
             github = GitHubClient()
             created_issues = []
 
-            # Repository IDとProject IDを取得
-            from src.github.queries import GET_REPOSITORY_AND_PROJECT_IDS
+            # Repository ID、Project ID、およびフィールド情報を取得
+            from src.github.queries import (
+                GET_REPOSITORY_AND_PROJECT_IDS,
+                GET_PROJECT_FIELDS,
+            )
 
             ids_result = await github.execute_query(
                 GET_REPOSITORY_AND_PROJECT_IDS,
@@ -157,10 +194,50 @@ class CreateTaskWorkflow:
             )
 
             repo_id = ids_result["repository"]["id"]
-            project_id = ids_result["organization"]["projectV2"]["id"]
+            project_id = ids_result["user"]["projectV2"]["id"]
+
+            # Sizeフィールド情報を取得
+            fields_result = await github.execute_query(
+                GET_PROJECT_FIELDS,
+                {
+                    "org": settings.GITHUB_ORG,
+                    "projectNumber": settings.GITHUB_PROJECT_NUMBER,
+                },
+            )
+
+            # Sizeフィールドを探す
+            size_field = None
+            for field in fields_result["user"]["projectV2"]["fields"]["nodes"]:
+                if field.get("name") == "Size":
+                    size_field = field
+                    break
+
+            if not size_field:
+                logger.warning("Size field not found in project")
 
             # 各サブタスクをIssue化
-            for subtask in state["subtasks"]:
+            logger.info("\n" + "─" * 80)
+            logger.info("🔧 各サブタスクをIssue化")
+            logger.info("─" * 80)
+
+            for i, subtask in enumerate(state["subtasks"], 1):
+                logger.info(f"\n📌 [{i}/{len(state['subtasks'])}] {subtask['title']}")
+                # 参考コードセクションを構築
+                reference_section = ""
+                if subtask.get("reference_code"):
+                    ref = subtask["reference_code"]
+                    reference_section = f"""
+
+## Reference Code
+**File**: `{ref.get("file_path", "")}`
+
+```python
+{ref.get("snippet", "")}
+```
+
+**Note**: {ref.get("explanation", "")}
+"""
+
                 # Issue作成
                 issue_body = f"""
 ## Description
@@ -174,7 +251,7 @@ class CreateTaskWorkflow:
 
 ## Dependencies
 {chr(10).join(f"- {dep}" for dep in subtask.get("dependencies", []))}
-
+{reference_section}
 ---
 Created by AI Task Bot
 """
@@ -193,16 +270,55 @@ Created by AI Task Bot
                 issue_url = issue_result["createIssue"]["issue"]["url"]
 
                 # Projectに追加
-                await github.execute_query(
+                project_item_result = await github.execute_query(
                     ADD_TO_PROJECT, {"projectId": project_id, "contentId": issue_id}
                 )
 
+                project_item_id = project_item_result["addProjectV2ItemById"]["item"][
+                    "id"
+                ]
+
+                # Sizeフィールドを更新
+                if size_field:
+                    from src.utils.size_converter import (
+                        convert_effort_to_size,
+                        get_size_option_id,
+                    )
+
+                    estimated_effort = subtask.get("estimated_effort", "M")
+                    size_value = convert_effort_to_size(estimated_effort)
+                    size_option_id = get_size_option_id(
+                        size_field["options"], size_value
+                    )
+
+                    if size_option_id:
+                        await github.execute_query(
+                            UPDATE_PROJECT_FIELD,
+                            {
+                                "projectId": project_id,
+                                "itemId": project_item_id,
+                                "fieldId": size_field["id"],
+                                "value": {"singleSelectOptionId": size_option_id},
+                            },
+                        )
+                        logger.info(
+                            f"   ✓ Sizeフィールド設定: {estimated_effort} → {size_value}"
+                        )
+                    else:
+                        logger.warning(f"   ⚠️ Sizeオプション {size_value} が見つかりません")
+
                 created_issues.append({"title": subtask["title"], "url": issue_url})
 
-                logger.info(f"Created issue: {subtask['title']}")
+                logger.info(f"   ✓ Issue作成完了: {issue_url}")
 
             state["created_issues"] = created_issues
-            logger.info(f"Successfully created {len(created_issues)} issues")
+
+            logger.info("\n" + "=" * 80)
+            logger.info(f"✅ [ワークフロー] 全Issue作成完了: {len(created_issues)} 個")
+            logger.info("=" * 80)
+            for i, issue in enumerate(created_issues, 1):
+                logger.info(f"   {i}. {issue['title']}")
+                logger.info(f"      {issue['url']}")
 
         except Exception as e:
             state["error"] = f"Issue creation failed: {str(e)}"

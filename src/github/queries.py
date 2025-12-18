@@ -1,7 +1,7 @@
 # Project v2のアイテム取得（完了タスク除外可能）
 GET_PROJECT_ITEMS = """
 query GetProjectItems($org: String!, $projectNumber: Int!) {
-  organization(login: $org) {
+  user(login: $org) {
     projectV2(number: $projectNumber) {
       id
       title
@@ -48,7 +48,7 @@ query GetProjectItems($org: String!, $projectNumber: Int!) {
 # ユーザーのタスク取得
 GET_USER_TASKS = """
 query GetUserTasks($login: String!, $org: String!, $projectNumber: Int!) {
-  user(login: $login) {
+  targetUser: user(login: $login) {
     issues(first: 100, filterBy: {states: OPEN}) {
       nodes {
         id
@@ -72,7 +72,7 @@ query GetUserTasks($login: String!, $org: String!, $projectNumber: Int!) {
       }
     }
   }
-  organization(login: $org) {
+  orgUser: user(login: $org) {
     projectV2(number: $projectNumber) {
       id
       title
@@ -87,7 +87,7 @@ query GetIDs($org: String!, $repo: String!, $projectNumber: Int!) {
   repository(owner: $org, name: $repo) {
     id
   }
-  organization(login: $org) {
+  user(login: $org) {
     projectV2(number: $projectNumber) {
       id
     }
@@ -111,6 +111,29 @@ VALIDATE_TOKEN = """
 query {
   viewer {
     login
+  }
+}
+"""
+
+# Projectのフィールド情報取得
+GET_PROJECT_FIELDS = """
+query GetProjectFields($org: String!, $projectNumber: Int!) {
+  user(login: $org) {
+    projectV2(number: $projectNumber) {
+      id
+      fields(first: 20) {
+        nodes {
+          ... on ProjectV2SingleSelectField {
+            id
+            name
+            options {
+              id
+              name
+            }
+          }
+        }
+      }
+    }
   }
 }
 """

@@ -1,6 +1,11 @@
 from pathlib import Path
 from typing import List, Dict
 import os
+import subprocess
+import json
+from src.utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 class RepositoryAnalyzer:
@@ -43,6 +48,7 @@ class RepositoryAnalyzer:
             repo_path: 分析対象のリポジトリパス
         """
         self.repo_path = repo_path
+        self._code_parser = None
 
     def get_file_tree(self, max_depth: int = 3) -> str:
         """ファイルツリーを取得（Markdown形式）
@@ -162,3 +168,157 @@ class RepositoryAnalyzer:
             "total_lines": total_lines,
             "primary_language": primary_language,
         }
+
+    @property
+    def code_parser(self):
+        """CodeParserのlazy loading"""
+        if self._code_parser is None:
+            from src.repository.code_parser import CodeParser
+
+            self._code_parser = CodeParser()
+        return self._code_parser
+
+    def ripgrep_search(self, keywords: List[str]) -> List[Path]:
+        """ripgrepを使ってキーワードに関連するファイルを検索
+
+        Args:
+            keywords: 検索キーワードのリスト
+
+        Returns:
+            マッチしたファイルパスのリスト
+        """
+        if not keywords:
+            return []
+
+        logger.info(f"🔍 [ファイル検索] ripgrepでキーワード検索開始: {keywords}")
+
+        matched_files = set()
+
+        for keyword in keywords:
+            logger.info(f"   🔎 検索中: '{keyword}'...")
+            try:
+                # ripgrepをJSON出力モードで実行
+                result = subprocess.run(
+                    [
+                        "rg",
+                        "--json",
+                        "--iglob",
+                        "*.py",  # Pythonファイルのみ
+                        "--iglob",
+                        "!.venv",  # .venvを除外
+                        "--iglob",
+                        "!__pycache__",
+                        keyword,
+                        str(self.repo_path),
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                )
+
+                # JSON出力を解析
+                for line in result.stdout.splitlines():
+                    try:
+                        data = json.loads(line)
+                        if data.get("type") == "match":
+                            file_path = Path(data["data"]["path"]["text"])
+                            matched_files.add(file_path)
+                    except json.JSONDecodeError:
+                        continue
+
+            except (subprocess.TimeoutExpired, FileNotFoundError) as e:
+                # ripgrepが見つからない、またはタイムアウト
+                logger.warning(f"   ⚠️ ripgrepエラー、globにフォールバック: {e}")
+                # フォールバック: glob検索
+                matched_files.update(self.search_files(f"**/*{keyword}*"))
+
+        logger.info(f"✅ [検索完了] {len(matched_files)} ファイルが見つかりました")
+        for i, file_path in enumerate(list(matched_files)[:10], 1):
+            logger.info(f"   {i}. {file_path}")
+        if len(matched_files) > 10:
+            logger.info(f"   ... 他 {len(matched_files) - 10} ファイル")
+
+        return list(matched_files)
+
+    def read_code_intelligently(
+        self, keywords: List[str], max_functions: int = 20, max_chars: int = 50000
+    ) -> str:
+        """キーワードに基づいて関連するコードを賢く抽出
+
+        Args:
+            keywords: 検索キーワードのリスト
+            max_functions: 最大関数/クラス数
+            max_chars: 最大文字数
+
+        Returns:
+            Markdown形式の関連コード
+        """
+        logger.info(f"🧠 [賢いコード抽出] 開始 (最大{max_functions}関数, {max_chars}文字)")
+
+        # ripgrepでファイル検索
+        relevant_files = self.ripgrep_search(keywords)
+
+        if not relevant_files:
+            # フォールバック: キーワードベースのglob検索
+            relevant_files = []
+            for keyword in keywords:
+                relevant_files.extend(self.search_files(f"**/*{keyword}*"))
+            relevant_files = list(set(relevant_files))[:10]
+
+        content_parts = []
+        total_chars = 0
+        function_count = 0
+
+        logger.info(f"🌲 [tree-sitter解析] {len(relevant_files)} ファイルを解析中...")
+
+        for file_path in relevant_files:
+            if file_path.suffix != ".py":
+                continue
+
+            logger.info(f"   📄 解析中: {file_path}")
+
+            # tree-sitterで関数/クラスを抽出
+            definitions = self.code_parser.extract_relevant_code(file_path, keywords)
+
+            if definitions:
+                logger.info(f"      ✓ {len(definitions)} 個の関数/クラスを抽出")
+
+            if not definitions:
+                continue
+
+            relative_path = file_path.relative_to(self.repo_path)
+
+            for definition in definitions:
+                if function_count >= max_functions:
+                    break
+
+                code = definition["code"]
+                if total_chars + len(code) > max_chars:
+                    break
+
+                # Markdown形式でフォーマット
+                def_type = definition["type"]
+                def_name = definition["name"]
+                docstring = definition["docstring"]
+
+                header = f"## File: {relative_path} - {def_type.capitalize()}: {def_name}"
+                if docstring:
+                    header += f"\n**Description**: {docstring[:200]}..."
+
+                content_parts.append(f"{header}\n```python\n{code}\n```\n")
+
+                total_chars += len(code)
+                function_count += 1
+
+            if function_count >= max_functions or total_chars >= max_chars:
+                break
+
+        if not content_parts:
+            logger.warning("⚠️ [抽出完了] 関連コードが見つかりませんでした")
+            return "No relevant code found."
+
+        logger.info(f"✅ [抽出完了] {function_count} 個の関数/クラスを抽出しました")
+        logger.info(f"   📊 総文字数: {total_chars} 文字")
+        logger.info(f"   💰 推定トークン: ~{total_chars // 4} tokens")
+
+        return "\n".join(content_parts)

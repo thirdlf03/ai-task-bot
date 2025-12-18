@@ -11,6 +11,17 @@ class TaskBreakdownAgent:
     def __init__(self):
         self.gemini = GeminiClient()
 
+    async def extract_keywords(self, task_description: str) -> List[str]:
+        """タスク説明からキーワードを抽出
+
+        Args:
+            task_description: タスクの説明
+
+        Returns:
+            キーワードのリスト
+        """
+        return await self.gemini.extract_keywords(task_description)
+
     async def break_down(
         self, task_description: str, repo_context: str
     ) -> List[Dict[str, any]]:

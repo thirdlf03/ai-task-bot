@@ -28,14 +28,14 @@ async def setup_get_task_command(tree: app_commands.CommandTree):
 
             data = await client.execute_query(GET_USER_TASKS, variables)
 
-            if not data["user"]:
+            if not data["targetUser"]:
                 await interaction.followup.send(
                     f"ユーザー `{github_id}` が見つかりません"
                 )
                 return
 
-            project = data["organization"]["projectV2"]
-            user_issues = data["user"]["issues"]["nodes"]
+            project = data["orgUser"]["projectV2"]
+            user_issues = data["targetUser"]["issues"]["nodes"]
 
             # このProjectに属するIssueのみフィルタ
             project_tasks = []

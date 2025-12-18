@@ -27,7 +27,7 @@ async def setup_get_all_task_command(tree: app_commands.CommandTree):
             }
 
             data = await client.execute_query(GET_PROJECT_ITEMS, variables)
-            project = data["organization"]["projectV2"]
+            project = data["user"]["projectV2"]
 
             # タスクをフィルタリング
             tasks = []
