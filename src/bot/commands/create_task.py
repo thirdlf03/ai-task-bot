@@ -4,6 +4,7 @@ import re
 from src.ai.workflow import CreateTaskWorkflow
 from src.config import settings
 from src.utils.logger import get_logger
+from src.utils.project_manager import ProjectManager
 
 logger = get_logger(__name__)
 
@@ -21,7 +22,7 @@ def validate_repo_url(url: str) -> bool:
     return bool(re.match(pattern, url))
 
 
-async def setup_create_task_command(tree: app_commands.CommandTree):
+async def setup_create_task_command(tree: app_commands.CommandTree, project_manager: ProjectManager):
     """/create-taskコマンドをセットアップ"""
 
     @tree.command(
@@ -50,14 +51,18 @@ async def setup_create_task_command(tree: app_commands.CommandTree):
                 await interaction.followup.send("無効なリポジトリURLです")
                 return
 
+            # ユーザーのプロジェクト番号を取得
+            discord_id = str(interaction.user.id)
+            project_number = project_manager.get_project_number(discord_id)
+
             # 進行状況を表示
             await interaction.followup.send(
-                f"タスク分析を開始します...\nタスク: `{task}`\nリポジトリ: {repo_url}"
+                f"タスク分析を開始します...\nタスク: `{task}`\nリポジトリ: {repo_url}\nプロジェクト番号: {project_number}"
             )
 
             # ワークフロー実行
             workflow = CreateTaskWorkflow()
-            result = await workflow.execute(task, repo_url)
+            result = await workflow.execute(task, repo_url, project_number=project_number)
 
             # エラーチェック
             if result.get("error"):

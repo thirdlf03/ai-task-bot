@@ -4,11 +4,12 @@ from src.github.client import GitHubClient
 from src.github.queries import GET_USER_TASKS
 from src.config import settings
 from src.utils.logger import get_logger
+from src.utils.project_manager import ProjectManager
 
 logger = get_logger(__name__)
 
 
-async def setup_get_task_command(tree: app_commands.CommandTree):
+async def setup_get_task_command(tree: app_commands.CommandTree, project_manager: ProjectManager):
     """/ get-taskコマンドをセットアップ"""
 
     @tree.command(
@@ -19,11 +20,15 @@ async def setup_get_task_command(tree: app_commands.CommandTree):
         await interaction.response.defer()
 
         try:
+            # ユーザーのプロジェクト番号を取得
+            discord_id = str(interaction.user.id)
+            project_number = project_manager.get_project_number(discord_id)
+
             client = GitHubClient()
             variables = {
                 "login": github_id,
                 "org": settings.GITHUB_ORG,
-                "projectNumber": settings.GITHUB_PROJECT_NUMBER,
+                "projectNumber": project_number,
             }
 
             data = await client.execute_query(GET_USER_TASKS, variables)
@@ -43,7 +48,7 @@ async def setup_get_task_command(tree: app_commands.CommandTree):
                 for project_item in issue["projectItems"]["nodes"]:
                     if (
                         project_item["project"]["number"]
-                        == settings.GITHUB_PROJECT_NUMBER
+                        == project_number
                     ):
                         project_tasks.append(issue)
                         break

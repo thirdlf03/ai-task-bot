@@ -90,6 +90,7 @@ query GetIDs($org: String!, $repo: String!, $projectNumber: Int!) {
   user(login: $org) {
     projectV2(number: $projectNumber) {
       id
+      title
     }
   }
 }

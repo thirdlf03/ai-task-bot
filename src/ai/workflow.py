@@ -25,6 +25,7 @@ class WorkflowState(TypedDict):
     subtasks: list
     created_issues: list
     error: str
+    project_number: int  # GitHub Project番号
 
 
 class CreateTaskWorkflow:
@@ -190,7 +191,7 @@ class CreateTaskWorkflow:
                 {
                     "org": settings.GITHUB_ORG,
                     "repo": settings.GITHUB_REPO,
-                    "projectNumber": settings.GITHUB_PROJECT_NUMBER,
+                    "projectNumber": state["project_number"],
                 },
             )
 
@@ -205,20 +206,31 @@ class CreateTaskWorkflow:
                     GET_PROJECT_ITEMS,
                     {
                         "org": settings.GITHUB_ORG,
-                        "projectNumber": settings.GITHUB_PROJECT_NUMBER,
+                        "projectNumber": state["project_number"],
                     },
                 )
 
-                existing_issues = []
-                for item in existing_items_result["user"]["projectV2"]["items"]["nodes"]:
-                    content = item.get("content")
-                    if content and content.get("title"):
-                        existing_issues.append({
-                            "title": content["title"],
-                            "url": content["url"],
-                            "state": content.get("state", "OPEN"),
-                            "number": content.get("number"),
-                        })
+                # Debug: Log raw response
+                logger.debug(f"   Raw project items response: {existing_items_result}")
+
+                project_data = existing_items_result.get("user", {}).get("projectV2")
+                if not project_data:
+                    logger.warning("   ⚠️ Project data not found in response")
+                    existing_issues = []
+                else:
+                    items = project_data.get("items", {}).get("nodes", [])
+                    logger.debug(f"   Found {len(items)} total items in project")
+
+                    existing_issues = []
+                    for item in items:
+                        content = item.get("content")
+                        if content and content.get("title"):
+                            existing_issues.append({
+                                "title": content["title"],
+                                "url": content["url"],
+                                "state": content.get("state", "OPEN"),
+                                "number": content.get("number"),
+                            })
 
                 logger.info(f"   Found {len(existing_issues)} existing issues")
 
@@ -424,18 +436,22 @@ Created by AI Task Bot
         return state
 
     async def execute(
-        self, task_description: str, repo_url: str, timeout_seconds: int = 300
+        self, task_description: str, repo_url: str, project_number: int = None, timeout_seconds: int = 300
     ) -> WorkflowState:
         """ワークフローを実行
 
         Args:
             task_description: タスクの説明
             repo_url: リポジトリURL
+            project_number: GitHub Project番号（省略時はデフォルト値）
             timeout_seconds: タイムアウト時間（秒）
 
         Returns:
             WorkflowState: 実行結果
         """
+        if project_number is None:
+            project_number = settings.GITHUB_PROJECT_NUMBER
+
         initial_state = WorkflowState(
             task_description=task_description,
             repo_url=repo_url,
@@ -445,6 +461,7 @@ Created by AI Task Bot
             subtasks=[],
             created_issues=[],
             error="",
+            project_number=project_number,
         )
 
         try:

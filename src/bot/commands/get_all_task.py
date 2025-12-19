@@ -4,11 +4,12 @@ from src.github.client import GitHubClient
 from src.github.queries import GET_PROJECT_ITEMS
 from src.config import settings
 from src.utils.logger import get_logger
+from src.utils.project_manager import ProjectManager
 
 logger = get_logger(__name__)
 
 
-async def setup_get_all_task_command(tree: app_commands.CommandTree):
+async def setup_get_all_task_command(tree: app_commands.CommandTree, project_manager: ProjectManager):
     """/ get-all-taskコマンドをセットアップ"""
 
     @tree.command(
@@ -20,10 +21,14 @@ async def setup_get_all_task_command(tree: app_commands.CommandTree):
         await interaction.response.defer(ephemeral=True)  # 本人のみ表示
 
         try:
+            # ユーザーのプロジェクト番号を取得
+            discord_id = str(interaction.user.id)
+            project_number = project_manager.get_project_number(discord_id)
+
             client = GitHubClient()
             variables = {
                 "org": settings.GITHUB_ORG,
-                "projectNumber": settings.GITHUB_PROJECT_NUMBER,
+                "projectNumber": project_number,
             }
 
             data = await client.execute_query(GET_PROJECT_ITEMS, variables)

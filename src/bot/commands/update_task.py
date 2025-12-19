@@ -6,11 +6,12 @@ from src.github.queries import GET_ISSUE_WITH_PROJECT_ITEM, GET_PROJECT_FIELDS, 
 from src.github.mutations import UPDATE_PROJECT_FIELD, ADD_ASSIGNEES, REMOVE_ASSIGNEES
 from src.config import settings
 from src.utils.logger import get_logger
+from src.utils.project_manager import ProjectManager
 
 logger = get_logger(__name__)
 
 
-async def setup_update_task_command(tree: app_commands.CommandTree):
+async def setup_update_task_command(tree: app_commands.CommandTree, project_manager: ProjectManager):
     """/update-taskコマンドをセットアップ"""
 
     @tree.command(
@@ -39,6 +40,10 @@ async def setup_update_task_command(tree: app_commands.CommandTree):
                 )
                 return
 
+            # ユーザーのプロジェクト番号を取得
+            discord_id = str(interaction.user.id)
+            project_number = project_manager.get_project_number(discord_id)
+
             client = GitHubClient()
 
             # Issue情報を取得
@@ -48,7 +53,7 @@ async def setup_update_task_command(tree: app_commands.CommandTree):
                     "org": settings.GITHUB_ORG,
                     "repo": settings.GITHUB_REPO,
                     "issueNumber": issue_number,
-                    "projectNumber": settings.GITHUB_PROJECT_NUMBER
+                    "projectNumber": project_number
                 }
             )
 
@@ -60,7 +65,7 @@ async def setup_update_task_command(tree: app_commands.CommandTree):
             # 該当するProject Itemを取得
             project_item = None
             for item in issue["projectItems"]["nodes"]:
-                if item["project"]["number"] == settings.GITHUB_PROJECT_NUMBER:
+                if item["project"]["number"] == project_number:
                     project_item = item
                     break
 
@@ -78,7 +83,7 @@ async def setup_update_task_command(tree: app_commands.CommandTree):
                     GET_PROJECT_FIELDS,
                     {
                         "org": settings.GITHUB_ORG,
-                        "projectNumber": settings.GITHUB_PROJECT_NUMBER
+                        "projectNumber": project_number
                     }
                 )
 

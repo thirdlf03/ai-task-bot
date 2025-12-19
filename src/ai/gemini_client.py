@@ -13,7 +13,7 @@ class GeminiClient:
 
     def __init__(self):
         self.client = genai.Client(api_key=settings.GEMINI_API_KEY)
-        self.model_name = "gemini-2.0-flash-exp"
+        self.model_name = "gemini-3-flash-preview"
 
     async def analyze_code(
         self, code_context: str, task_description: str
@@ -90,8 +90,8 @@ class GeminiClient:
 - **タイトルはConventional Commits形式に従う**: type(scope): description
   - type: feat, fix, docs, style, refactor, perf, test, chore のいずれか
   - scope: 変更の範囲（例: api, ui, db）- オプション
-  - description: 簡潔な説明（小文字で始まる）
-  - 例: "feat(api): add user authentication", "fix(db): resolve connection timeout"
+  - description: **日本語**で簡潔な説明を記述（小文字で始まる）
+  - 例: "feat(reminder): リマインダーエンティティモデルを追加", "fix(db): 接続タイムアウトの問題を修正"
 
 以下のJSON形式で回答してください:
 ```json
