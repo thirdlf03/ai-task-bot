@@ -1,9 +1,9 @@
 from google import genai
 from typing import List, Dict, Any
-import json
-import re
+from pydantic import ValidationError
 from src.config import settings
 from src.utils.logger import get_logger
+from src.ai.schemas import AnalysisResponse, SubtaskResponse, KeywordResponse
 
 logger = get_logger(__name__)
 
@@ -36,29 +36,43 @@ class GeminiClient:
 
 ## コードコンテキスト
 {code_context}
-
-以下のJSON形式で回答してください:
-```json
-{{
-  "is_implemented": true/false,
-  "confidence": 0.0-1.0,
-  "reasoning": "判定理由",
-  "related_files": ["関連ファイルパス"],
-  "missing_components": ["未実装の要素"]
-}}
-```
 """
 
         logger.info("Analyzing code implementation status with Gemini...")
-        response = self.client.models.generate_content(
-            model=self.model_name,
-            contents=prompt
-        )
-        result = self._parse_analysis_response(response.text)
-        logger.info(
-            f"Analysis complete: is_implemented={result['is_implemented']}, confidence={result['confidence']}"
-        )
-        return result
+
+        try:
+            response = self.client.models.generate_content(
+                model=self.model_name,
+                contents=prompt,
+                config={
+                    "response_mime_type": "application/json",
+                    "response_json_schema": AnalysisResponse.model_json_schema(),
+                }
+            )
+
+            # Pydanticでバリデーション
+            result = AnalysisResponse.model_validate_json(response.text)
+            result_dict = result.model_dump()
+
+            logger.info(
+                f"Analysis complete: is_implemented={result_dict['is_implemented']}, confidence={result_dict['confidence']}"
+            )
+            return result_dict
+
+        except ValidationError as e:
+            logger.error(f"❌ [Pydantic Validation Failed] {e}")
+            logger.error(f"Response text: {response.text}")
+            # フォールバック: デフォルト値を返す（分析失敗 = 実装されていないと判定）
+            return {
+                "is_implemented": False,
+                "confidence": 0.0,
+                "reasoning": f"Parse failed: {str(e)}",
+                "related_files": [],
+                "missing_components": [],
+            }
+        except Exception as e:
+            logger.error(f"❌ [Analysis Failed] {e}")
+            raise
 
     async def break_down_task(
         self, task_description: str, repo_context: str
@@ -93,106 +107,48 @@ class GeminiClient:
   - description: **日本語**で簡潔な説明を記述（小文字で始まる）
   - 例: "feat(reminder): リマインダーエンティティモデルを追加", "fix(db): 接続タイムアウトの問題を修正"
 
-以下のJSON形式で回答してください:
-```json
-{{
-  "subtasks": [
-    {{
-      "title": "サブタスクのタイトル",
-      "description": "詳細な説明",
-      "estimated_effort": "S/M/L",
-      "dependencies": ["依存する他のサブタスク"],
-      "acceptance_criteria": ["完了条件1", "完了条件2"],
-      "reference_code": {{
-        "file_path": "参考ファイルのパス",
-        "snippet": "重要部分のコード抜粋（10-20行程度）",
-        "explanation": "このコードをどのように参考にすべきか"
-      }}
-    }}
-  ]
-}}
-```
-
 注意: 参考コードがない場合、reference_codeはnullにしてください。
 """
 
         logger.info("🤖 [AI Processing] Starting task breakdown...")
         logger.info(f"📊 Repository context: {len(repo_context)} characters")
 
-        response = self.client.models.generate_content(
-            model=self.model_name,
-            contents=prompt
-        )
-
-        logger.info(f"💭 [Gemini Response Length] {len(response.text)} characters")
-        logger.info(f"💭 [Gemini Response Preview]\n{response.text[:1000]}...")
-
-        subtasks = self._parse_subtasks_response(response.text)
-
-        logger.info(f"✅ [Task Breakdown Complete] Created {len(subtasks)} subtasks")
-
-        # Log details of each subtask
-        for i, subtask in enumerate(subtasks, 1):
-            logger.info(f"📌 Subtask {i}/{len(subtasks)}: {subtask.get('title', 'No title')}")
-            logger.info(f"   ├─ Size: {subtask.get('estimated_effort', 'Unknown')}")
-            logger.info(f"   ├─ Dependencies: {subtask.get('dependencies', [])}")
-            logger.info(f"   └─ Reference code: {'Yes' if subtask.get('reference_code') else 'No'}")
-
-        return subtasks
-
-    def _parse_analysis_response(self, text: str) -> Dict[str, Any]:
-        """レスポンスをパース（JSON抽出）
-
-        Args:
-            text: Gemini APIからのレスポンステキスト
-
-        Returns:
-            Dict containing analysis results
-        """
-        # コードブロック内のJSONを抽出
-        json_match = re.search(r"```json\n(.*?)\n```", text, re.DOTALL)
-        if json_match:
-            try:
-                return json.loads(json_match.group(1))
-            except json.JSONDecodeError:
-                pass
-
-        # 直接JSONを探す
         try:
-            return json.loads(text)
-        except json.JSONDecodeError:
-            logger.error(f"Failed to parse JSON from: {text}")
-            return {
-                "is_implemented": False,
-                "confidence": 0.0,
-                "reasoning": "Parse failed",
-                "related_files": [],
-                "missing_components": [],
-            }
+            response = self.client.models.generate_content(
+                model=self.model_name,
+                contents=prompt,
+                config={
+                    "response_mime_type": "application/json",
+                    "response_json_schema": SubtaskResponse.model_json_schema(),
+                }
+            )
 
-    def _parse_subtasks_response(self, text: str) -> List[Dict[str, Any]]:
-        """サブタスクレスポンスをパース
+            logger.info(f"💭 [Gemini Response Length] {len(response.text)} characters")
+            logger.info(f"💭 [Gemini Response Preview]\n{response.text[:1000]}...")
 
-        Args:
-            text: Gemini APIからのレスポンステキスト
+            # Pydanticでバリデーション
+            result = SubtaskResponse.model_validate_json(response.text)
+            subtasks = [subtask.model_dump() for subtask in result.subtasks]
 
-        Returns:
-            List of subtasks
-        """
-        json_match = re.search(r"```json\n(.*?)\n```", text, re.DOTALL)
-        if json_match:
-            try:
-                data = json.loads(json_match.group(1))
-                return data.get("subtasks", [])
-            except json.JSONDecodeError:
-                pass
+            logger.info(f"✅ [Task Breakdown Complete] Created {len(subtasks)} subtasks")
 
-        try:
-            data = json.loads(text)
-            return data.get("subtasks", [])
-        except json.JSONDecodeError:
-            logger.error(f"Failed to parse subtasks from: {text}")
-            return []
+            # Log details of each subtask
+            for i, subtask in enumerate(subtasks, 1):
+                logger.info(f"📌 Subtask {i}/{len(subtasks)}: {subtask.get('title', 'No title')}")
+                logger.info(f"   ├─ Size: {subtask.get('estimated_effort', 'Unknown')}")
+                logger.info(f"   ├─ Dependencies: {subtask.get('dependencies', [])}")
+                logger.info(f"   └─ Reference code: {'Yes' if subtask.get('reference_code') else 'No'}")
+
+            return subtasks
+
+        except ValidationError as e:
+            logger.error(f"❌ [Pydantic Validation Failed] {e}")
+            logger.error(f"Response text: {response.text}")
+            # フォールバック: 空リストではなくエラーを投げる
+            raise ValueError(f"Failed to parse task breakdown response: {e}") from e
+        except Exception as e:
+            logger.error(f"❌ [Task Breakdown Failed] {e}")
+            raise
 
     async def extract_keywords(self, task_description: str) -> List[str]:
         """タスク説明からファイル検索用のキーワードを抽出
@@ -209,13 +165,6 @@ class GeminiClient:
 ## タスク内容
 {task_description}
 
-以下のJSON形式で回答してください:
-```json
-{{
-  "keywords": ["keyword1", "keyword2", "keyword3"]
-}}
-```
-
 注意:
 - キーワードは3-5個程度
 - ファイル名やフォルダ名に含まれそうな単語を選ぶ
@@ -225,39 +174,33 @@ class GeminiClient:
         logger.info("🤖 [AI Processing] Starting keyword extraction...")
         logger.info(f"📝 Task description: {task_description}")
 
-        response = self.client.models.generate_content(
-            model=self.model_name,
-            contents=prompt
-        )
-
-        logger.info(f"💭 [Gemini Response]\n{response.text[:500]}...")
-
-        result = self._parse_keywords_response(response.text)
-        keywords = result.get("keywords", [])
-
-        logger.info(f"🔑 [Extraction Complete] Keywords: {keywords}")
-        logger.info(f"💡 [AI Decision] Searching files with these keywords")
-
-        return keywords
-
-    def _parse_keywords_response(self, text: str) -> Dict[str, List[str]]:
-        """キーワード抽出レスポンスをパース
-
-        Args:
-            text: Gemini APIからのレスポンステキスト
-
-        Returns:
-            Dict containing keywords list
-        """
-        json_match = re.search(r"```json\n(.*?)\n```", text, re.DOTALL)
-        if json_match:
-            try:
-                return json.loads(json_match.group(1))
-            except json.JSONDecodeError:
-                pass
-
         try:
-            return json.loads(text)
-        except json.JSONDecodeError:
-            logger.error(f"Failed to parse keywords from: {text}")
-            return {"keywords": []}
+            response = self.client.models.generate_content(
+                model=self.model_name,
+                contents=prompt,
+                config={
+                    "response_mime_type": "application/json",
+                    "response_json_schema": KeywordResponse.model_json_schema(),
+                }
+            )
+
+            logger.info(f"💭 [Gemini Response]\n{response.text[:500]}...")
+
+            # Pydanticでバリデーション
+            result = KeywordResponse.model_validate_json(response.text)
+            keywords = result.keywords
+
+            logger.info(f"🔑 [Extraction Complete] Keywords: {keywords}")
+            logger.info(f"💡 [AI Decision] Searching files with these keywords")
+
+            return keywords
+
+        except ValidationError as e:
+            logger.error(f"❌ [Pydantic Validation Failed] {e}")
+            logger.error(f"Response text: {response.text}")
+            # フォールバック: 空リストを返す（キーワード検索をスキップ）
+            logger.warning("⚠️ Keyword extraction failed, returning empty list")
+            return []
+        except Exception as e:
+            logger.error(f"❌ [Keyword Extraction Failed] {e}")
+            raise
